@@ -29,6 +29,8 @@ export default class Logger {
   protected client?: ClientInterface;
   protected storage?: StorageInterface;
   protected console?: ConsoleInterface;
+  protected originalConsole: ConsoleInterface = {} as ConsoleInterface;
+  protected globalConsole: ConsoleInterface = {} as ConsoleInterface;
 
   protected events: InputLogEvents = [];
   protected intervalId?: NodeJS.Timeout | number;
@@ -54,6 +56,16 @@ export default class Logger {
    * @param levels - Reported error level
    */
   public setLevels(levels: Level[]): this {
+    for (const level of levels) {
+      this.globalConsole[level] = async (message, ...args): Promise<void> => {
+        // Listen overridden console.*() function calls (type="console", level="*")
+        await this.onError(new Error(message), { type: 'console', level });
+        if (!this.muting) {
+          this.originalConsole[level](message, ...args);
+        }
+      };
+    }
+
     this.levels = levels;
     return this;
   }
@@ -127,19 +139,19 @@ export default class Logger {
     this.messageFormatter = messageFormatter;
     this.storage = storage;
 
+    //
     // Swap window.console.*() functions and overridden ones
-    const originalConsole: ConsoleInterface = {} as any;
-    for (const level of this.levels) {
-      originalConsole[level] = globalConsole[level].bind(globalConsole);
-      globalConsole[level] = async (message, ...args): Promise<void> => {
-        // Listen overridden console.*() function calls (type="console", level="*")
-        await this.onError(new Error(message), { type: "console", level });
-        if (!this.muting) {
-          originalConsole[level](message, ...args);
-        }
-      };
+    //
+    this.globalConsole = globalConsole;
+    this.originalConsole = {} as ConsoleInterface;
+
+    for (const level of ["debug", "info", "log", "warn", "error"]) {
+      this.originalConsole[level as keyof ConsoleInterface] = this.globalConsole[level as keyof ConsoleInterface].bind(this.globalConsole);
     }
-    this.console = originalConsole;
+    this.console = this.originalConsole;
+
+    // Initiate the log level handlers
+    this.setLevels(this.levels);
 
     // Listen "error" event on window (type="uncaught")
     eventTarget.addEventListener(
